@@ -1,0 +1,83 @@
+esphome:
+  name: wemos_moisture
+  platform: ESP8266
+  board: d1_mini_lite
+  on_boot:
+    then: # This ensures no sensors are getting power
+      - output.turn_off: plant1Output
+      - output.turn_off: plant2Output
+
+wifi:
+  ssid: !secret ssid
+  password: !secret wifi_password
+
+api:
+
+logger:
+
+ota:
+
+# These define the GPIO that are hooked up to the positive pin on the individual sensors
+output:
+  - platform: gpio
+    pin: D0
+    id: plant1Output
+  - platform: gpio
+    pin: D1
+    id: plant2Output
+
+
+# Dry 0.7 - taken from in the air, probably should do it directly in dry soil
+# Wet 0.264 - taken from in a glass of water, probably should do it directly in saturated soil
+sensor:
+# This is the actual reading of the various sensors
+  - platform: adc 
+    pin: A0
+    id: moisture
+    update_interval: 0.1s
+    internal: true # Don't expose this sensor to HA, the template sensors will do that
+    accuracy_decimals: 1
+    filters:
+      - sliding_window_moving_average: # averages the last 10 results, probably overkill
+          window_size: 10
+          send_every: 10
+      - lambda: |-
+          if (x > 0.7) { 				// if over 0.7 volts, we are dry
+            return 0;
+          } else if (x < 0.264) { 			// if under 0.264 volts, we are fully saturated
+            return 100;
+          } else {
+            return (0.7-x) / (0.7-0.264) * 100.0; 	// use a linear fit for any values in between
+          }
+# actual sensors reported to Home Assistant, pull the value from the internal ADC sensor
+  - platform: template
+    name: "Plant 1 Soil Saturation"
+    id: plant1
+    unit_of_measurement: "% Saturation"
+    icon: "mdi:water-percent"
+    update_interval: never
+    accuracy_decimals: 0
+    lambda: |-
+      return id(moisture).state;
+  - platform: template
+    name: "Plant 2 Soil Saturation"
+    id: plant2
+    unit_of_measurement: "% Saturation"
+    icon: "mdi:water-percent"
+    update_interval: never
+    accuracy_decimals: 0
+    lambda: |-
+      return id(moisture).state;
+
+# This is the code that runs over and over again turning on the correct sensors then updating the template sensors
+interval:
+  - interval: 15s # if you add more outputs, increase this time as appropriate
+    then:
+      - output.turn_on: plant1Output # turn on sensor 1
+      - delay: 5s # let sensor 1's reading settle
+      - component.update: plant1 # update sensor 1's reading in HA
+      - output.turn_off: plant1Output # stop powering sensor 1
+      - output.turn_on: plant2Output # turn on sensor 2
+      - delay: 5s # let sensor 2's reading settle
+      - component.update: plant2 # update sensor 2's reading in HA
+      - output.turn_off: plant2Output # stop powering sensor 2
